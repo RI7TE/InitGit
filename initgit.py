@@ -361,18 +361,23 @@ def create_repo(
     with commit_context(cwd, description=description, message=message, branch=branch) as (uname, rname):
         repo_name=repo_name or rname
         username=username or uname
-        backupcmds = ["git branch -m master" ,f"git remote add origin https://github.com/{username}/{repo_name}.git","git push -u origin master"]
+        backupcmds = [
+            "git branch -m master",
+            f"git remote add origin https://github.com/{username}/{repo_name}.git",
+            "git push -u origin master",
+        ]
         try:
             repo_cmd = _repo_command(cwd, username=username , repo_name=repo_name, visibility=visibility, remote_name=remote, description=description, url=url, interactive=interactive)
             command = cmd(repo_cmd, cwd)
             sleep(0)
-            _results.append((repo_cmd.split()[0], command))
+            _results.append((" ".join(repo_cmd.split(" ")[:1]), command))
         except CommandError as e:
             print(toterm(f"Command failed: {e.message}", "red"))
             _results.append((e.command, e))
             if isinstance(e, CommandError) and e.error_code == 1:
 
                 try:
+
                     print(toterm("trying alternate", "yellow"))
                     commands = [cmd(c) for c in backupcmds]
                     sleep(0)
@@ -380,11 +385,27 @@ def create_repo(
                 except CommandError as e:
                     print(toterm(f"Backup commands failed: {e.message}", "red"))
                     _results.append((e.command, e))
-                    raise CommandError(
-                        e.command,
-                        e.error_code,
-                        f"Failed to create remote repository {repo_name if repo_name else rname}. Check the commands and try again."
-                    ) from e
+                    other_cmds = ["git branch -m master ", "git push -u origin master"]
+                    try:
+                        for c in other_cmds:
+                            r = cmd(c, cwd)
+                            sleep(0)
+                            _results.append((c, r))
+                    except CommandError as e:
+                        print(toterm(f"Command failed: {e.message}", "red"))
+                        _results.append((e.command, e))
+                        if isinstance(e, CommandError) and e.error_code == 1:
+                            print(
+                                toterm(
+                                    f"Failed to create remote repository {repo_name if repo_name else rname}. Check the commands and try again.",
+                                    "red",
+                                )
+                            )
+                        raise CommandError(
+                            e.command,
+                            e.error_code,
+                            f"Failed to create remote repository {repo_name if repo_name else rname}. Check the commands and try again.",
+                        ) from e
     if all(isinstance(r[1], int) and r[1] == 0 for r in _results):
         print(toterm(f"Repository {repo_name if repo_name else rname} created and added as origin.", "green"))
     else:
