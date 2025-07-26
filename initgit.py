@@ -421,8 +421,8 @@ def create_repo(
     if _results:
         print(
             toterm(
-                f"{len(_results)} Commands executed successfully out of {len(_results)}:"
-            ), "magenta"
+                f"{len(_results)} Commands executed successfully out of {len(_results)}:", "magenta"
+            )
         )
         print("Commands executed:")
         for command, result in _results:
