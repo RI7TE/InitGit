@@ -10,15 +10,14 @@ from os import environ as en
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import ujson as json
-
 from dotenv import find_dotenv, load_dotenv
+from pkg_resources import require
 
 
 load_dotenv(find_dotenv())
 
 __version__ = "0.1.0"
-#__name__ = "initgit"
+# __name__ = "initgit"
 __author__ = "Steven Kellum"
 
 
@@ -41,6 +40,11 @@ from _license import LICENSE_TEXT
 
 
 """
+1. git add .
+2. git commit -a -m '{message}'
+3. git branch -M master
+4. git push -u origin master
+5. touch setup.py
 "To push changes, use: git push -u origin master"
 "To pull changes, use: git pull origin master"
 "To fetch changes, use: git fetch origin"
@@ -50,18 +54,25 @@ from _license import LICENSE_TEXT
 "To view the diff, use: git diff"
 """
 
-GIT_USERNAME = en.get("GITHUB_USERNAME") or  shlex.quote(input("Enter your GitHub username: ").strip() or "your_username").strip()
+GIT_USERNAME = (
+    en.get("GITHUB_USERNAME")
+    or shlex.quote(
+        input("Enter your GitHub username: ").strip() or "your_username"
+    ).strip()
+)
 CURRENT_DIR = Path.cwd().absolute()
 GITDIR = CURRENT_DIR / ".git"
 MSGFILE = GITDIR / "COMMIT_EDITMSG"
 
-GIT_IGNORE_PATH = Path(__file__).absolute().parent / os.getenv("GITIGNORE_TEXTFILE", "_gitignore.txt")
+GIT_IGNORE_PATH = Path(__file__).absolute().parent / os.getenv(
+    "GITIGNORE_TEXTFILE", "_gitignore.txt"
+)
 GIT_IGNORE = GIT_IGNORE_PATH.read_text().strip() if GIT_IGNORE_PATH.exists() else ""
 
 LICENSE = shlex.quote(LICENSE_TEXT.strip())
 
 
-def toterm(x, color:str="red"):
+def toterm(x, color: str = "red"):
     if color == "red":
         return Fore.RED + Style.BRIGHT + x + Style.RESET_ALL
     if color == "blue":
@@ -77,6 +88,7 @@ def toterm(x, color:str="red"):
     if color == "white":
         return Fore.WHITE + Style.BRIGHT + x + Style.RESET_ALL
     return Fore.BLACK + Style.BRIGHT + x + Style.RESET_ALL
+
 
 class Selector(Enum):
     _GIT_INIT = '1'
@@ -102,6 +114,7 @@ class Selector(Enum):
     PULL = "pull"
     PUSH = "push"
 
+
 class Visibility(Enum):
     PUBLIC = "public"
     PRIVATE = "private"
@@ -111,11 +124,17 @@ class Visibility(Enum):
 class CommandError(Exception):
     """Custom exception for command errors."""
 
-    def __init__(self,cmd: str | None = None, errcode:int | None = None, *args,**kwds):
+    def __init__(
+        self, cmd: str | None = None, errcode: int | None = None, *args, **kwds
+    ):
         super().__init__(*args)
         self.error_code = errcode
         self.command = cmd
-        self.message = f"Command '{self.command}' failed with error: {self.error_code} {args[0] if args else ''}\n {' '.join(f"{k}={v}" for k, v in kwds.items())}" if args else f"Command '{self.command}' failed with error: {self.error_code}"
+        self.message = (
+            f"Command '{self.command}' failed with error: {self.error_code} {args[0] if args else ''}\n {' '.join(f'{k}={v}' for k, v in kwds.items())}"
+            if args
+            else f"Command '{self.command}' failed with error: {self.error_code}"
+        )
         self.args = args
 
     def __str__(self):
@@ -125,19 +144,18 @@ class CommandError(Exception):
         """Iterate over the error message."""
         args = self.command, self.error_code, self.args, self.message
         yield from args
+
     def __repr__(self):
         """Return a string representation of the error."""
         return f"CommandError(command={self.command!r}, message={self.message!r}, args={self.args!r})"
 
 
 class Command:
-    """A class to compile and run shell commands."""
-
     def __init__(self, command: str, cwd: Path | str | None = None):
         self.command = command
+        self.text = command.strip()
         self.cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-        self.text = shlex.quote(self.command.strip())
-        self.args = shlex.split(self.text)
+        self.args = shlex.split(self.command.strip())
         self.name = self.args[0]
         self.error_code = 0
         self.error = None
@@ -191,32 +209,17 @@ class Command:
         return False
 
     def __call__(self, *args, **kwargs):
-        """Run the command with the given arguments."""
         with self:
-            if args or kwargs:
-                command = (
-                    self.text
-                    + " "
-                    + " ".join(shlex.quote(str(arg)) for arg in args)
-                    + " "
-                    + " ".join(f"{k}={shlex.quote(str(v))}" for k, v in kwargs.items())
-                )
-                self.text = command
-                self.args = shlex.split(command)
-                self.name = self.args[0]
-            return self.run()
+            extra_args = list(args) + [f"{k}={v}" for k, v in kwargs.items()]
+            full_cmd = self.args + list(map(str, extra_args))
+            return self.run(full_cmd)
 
-    def run(self) -> int | str:
-        """Run the command."""
-
+    def run(self, args=None) -> int | str:
+        if args is None:
+            args = self.args
         try:
             proc = sp.run(
-                self.text,
-                check=True,
-                capture_output=True,
-                cwd=self.cwd,
-                shell=True,
-                text=True,
+                args, check=True, capture_output=True, cwd=self.cwd, text=True
             )
             proc.check_returncode()
 
@@ -257,7 +260,7 @@ class Command:
             )
 
         finally:
-            sleep(0)  # Give some time for the command to complete
+            sleep(1)  # Give some time for the command to complete
 
 
 def cmd(command: str | Command, cwd: str | Path | None = None) -> int | str:
@@ -268,7 +271,7 @@ def cmd(command: str | Command, cwd: str | Path | None = None) -> int | str:
 
     try:
         with command as com:
-            proc = com()
+            proc = com.run()
             if isinstance(proc, int):
                 if proc != 0:
                     print(toterm(f"Command failed with return code: {proc}", "red"))
@@ -314,20 +317,23 @@ def pre_stage(
     description = shlex.quote(
         description or input("Enter a description for the repository: ")
     ).strip()
-    pre_stage_commands = [
-        f'echo "{GIT_IGNORE.strip()}" > .gitignore',
-        f'echo "# {repo_name.strip()}\n{description.strip()}" > README.md',
-        f'echo "# {LICENSE.strip()}" > LICENSE.txt',
-    ]
-    for command in pre_stage_commands:
-        r = cmd(command, cwd=cwd)
-        if isinstance(r, int) and r != 0:
-            print(toterm(f"Command failed: {command} with return code {r}"))
-            raise CommandError(
-                command,
-                r,
-                f"Failed to create pre-stage files in {cwd}. Check the command and try again.",
-            )
+    gitignore_file = cwd / '.gitignore'
+    readme_file = cwd / "README.md"
+    license_file = cwd / "LICENSE.txt"
+    requirements_file = generate()
+    if not gitignore_file.exists():
+        gitignore_file.touch()
+    if not readme_file.exists():
+        readme_file.touch()
+    if not license_file.exists():
+        license_file.touch()
+    try:
+        gitignore_file.write_text(f'{GIT_IGNORE.strip()}')
+        readme_file.write_text(f'{repo_name.strip()}\n{description.strip()}')
+        license_file.write_text(f'{LICENSE.strip()}')
+    except Exception as e:
+        raise CommandError(cmd=" ".join(e.args), errcode=2, stage="PRE-STAGE") from e
+
     print(f"Pre-stage files created in {cwd}")
     return True, repo_name
 
@@ -373,7 +379,7 @@ def commit(cwd: Path | str | None = None, message: str | None = None):
             return commit(cwd=cwd, message=message)
     message = message or stamp_date()
     try:
-        return cmd(f"git commit -m {message}", cwd=cwd)
+        return cmd(f"git commit -a -m '{message}'", cwd=cwd)
     except CommandError as e:
         print(toterm(f"Commit failed: {e.message}", "red"))
         if e.error_code == 1:
@@ -490,7 +496,9 @@ def _repo_command(
     base_cmd += f" {full_repo_name}"
 
     visibility = visibility or Visibility.PUBLIC
-    base_cmd += f" --source={cwd or '.'} --{visibility.value}"
+
+    base_cmd += f" --source='{shlex.quote(str(cwd))}'"
+    base_cmd += f" --{visibility.value}"
     if remote_name:
         base_cmd += f" --remote={shlex.quote(remote_name.strip())}"
     if description:
@@ -507,10 +515,10 @@ def update_repo(
 ):
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
     cmds = [
-        f"git add {filename or '.'}",
+        f"git add {filename or cwd}",
         f"git commit -m '{message}'  {shlex.quote(str(filename).strip())}"
         if filename
-        else f"git commit -m '{message}'",
+        else f"git commit -a -m '{message}'",
         "git branch -M master",
         "git push -u origin master",
     ]
@@ -579,7 +587,7 @@ def create_repo(
                 except CommandError as e:
                     print(toterm(f"Backup commands failed: {e.message}", "red"))
                     _results.append((e.command, e))
-                    other_cmds = ["git branch -m master ", "git push -u origin master"]
+                    other_cmds = ["git branch -M master ", "git push -u origin master"]
                     try:
                         for c in other_cmds:
                             r = cmd(c, cwd)
