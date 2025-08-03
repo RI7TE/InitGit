@@ -563,7 +563,15 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 
 def single_init(args:argparse.Namespace,parser: argparse.ArgumentParser,cwd:Path | str | None = None):
     if args.function_selector == Selector._GIT_INIT.value:
-        init_git(cwd, branch=args.branch)
+        with init_git(cwd, branch=args.branch) as com:
+            if com.return_code != 0:
+                raise CommandError(
+                    "git init",
+                    com.return_code,
+                    f"Failed to initialize git repository: {com.error}",
+                )
+            print(toterm(f"Git repository initialized in {cwd} with branch: {args.branch}", "green"))
+            viz(com.output, "blue")
         print(
             toterm(
                 f"Git repository initialized in {cwd} with branch: {args.branch}",
@@ -582,24 +590,62 @@ def single_init(args:argparse.Namespace,parser: argparse.ArgumentParser,cwd:Path
         else:
             print(toterm("Failed to create pre-stage files."))
     elif args.function_selector in [Selector._STAGE.value, Selector.ADD.value]:
-        stage(cwd=cwd)
+        with stage(cwd=cwd) as st:
+            if st.return_code != 0:
+                raise CommandError(
+                    "git add",
+                    st.return_code,
+                    f"Failed to stage files: {st.error}",
+                )
+            if not st.output:
+                print(toterm("No files staged.", "red"))
+                return
+            viz(st.output, "green")
         print(toterm(f"Files staged in {cwd}", "cyan"))
     elif args.function_selector in [Selector._COMMIT.value, Selector.COMMIT.value]:
         msg = shlex.quote(args.message or input("Enter commit message: ")).strip()
-        commit(cwd=cwd, message=msg)
-        print(toterm(f"Changes committed in {cwd} with message: {msg}", "yellow"))
+        with commit(cwd=cwd, message=msg) as com:
+            if com.return_code != 0:
+                raise CommandError(
+                    "git commit",
+                    com.return_code,
+                    f"Failed to commit changes: {com.error}",
+                )
+            if not com.output:
+                print(toterm("No changes to commit.", "red"))
+                return
+            viz(com.output, "green")
+            print(toterm(f"Changes committed in {cwd} with message: {msg}", "yellow"))
     elif args.function_selector == Selector._STATUS.value:
-        status = cmd("git status", cwd=cwd)
-        print(toterm(f"Git status in {cwd}:\n{status}", "yellow"))
+        with cmd("git status", cwd=cwd) as status:
+            if status.return_code != 0:
+                raise CommandError(
+                    "git status",
+                    status.return_code,
+                    f"Failed to get git status: {status.error}",
+                )
+            if not status.output:
+                print(toterm("No changes to show in the repository.", "red"))
+                return
+            print(toterm(f"Git status in {cwd}:\n{status.output}", "yellow"))
     elif args.function_selector == Selector._BRANCH.value:
-        branch = cmd("git branch -a", cwd=cwd)
-        print(toterm(f"Git branches in {cwd}:\n{branch}", "magenta"))
+        with cmd("git branch -a", cwd=cwd) as branch:
+            if not branch.output:
+                print(toterm("No branches found in the repository.", "red"))
+                return
+            if branch.return_code != 0:
+                raise CommandError(
+                    "git branch -a",
+                    branch.return_code,
+                    f"Failed to list branches: {branch.error}",
+                )
+            print(toterm(f"Branches in {cwd}:\n{branch.output}", "blue"))
     elif args.function_selector == Selector._LOG.value:
-        log = cmd("git log --oneline", cwd=cwd)
-        print(toterm(f"Git log in {cwd}:\n{log}", "blue"))
+        with cmd("git log --oneline", cwd=cwd) as log:
+            print(toterm(f"Git log in {cwd}:\n{log.output}", "blue"))
     elif args.function_selector == Selector._DIFF.value:
-        diff = cmd("git diff", cwd=cwd)
-        print(toterm(f"Git diff in {cwd}:\n{diff}", "green"))
+        with cmd("git diff", cwd=cwd) as diff:
+            print(toterm(f"Git diff in {cwd}:\n{diff.output}", "green"))
     elif args.function_selector in [Selector.DISCARD.value, Selector.UNCOMMIT.value]:
         file_path = shlex.quote(
             input("Enter the file path to discard changes: ")
