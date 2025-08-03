@@ -190,22 +190,12 @@ class Command:
 
 @contextmanager
 def cmd(
-    command: str | Command, cwd: str | Path | None = None, **kwds
+    command: str, cwd: str | Path | None = None, **kwds
 ) -> typing.Generator[Command, typing.Any, None]:
     """Run a shell command."""
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    command = (
-        Command(command=command, cwd=cwd, **kwds)
-        if isinstance(command, str)
-        else command
-    )
 
     try:
-        with command as com:
-            if com.return_code != 0:
-                print(toterm(f"Command failed with return code: {com.output}", "red"))
-            else:
-                print(toterm(f"Command output: {com.output}", "green"))
-            yield com
+        yield Command(command=command, cwd=cwd, **kwds)
     except Exception as e:
         raise CommandError from e
