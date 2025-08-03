@@ -239,14 +239,14 @@ def get_installed_version(pkg: str) -> str | None:
         return None
     return None
 
-def generate(root: Path) -> None:
+def generate(root: Path) -> Path:
     root = root or Path.cwd()
     if requirements_exists(root):
         viz(
             "requirements.txt already exists. Skipping file generation. If you want to retry, delete the requirements.txt file in the working directory.",
             color='yellow',
         )
-        return
+        return root / "requirements.txt"
     if package_name := find_top_package_name(root):
         imports = find_imports(root, package_name)
     else:
@@ -255,11 +255,11 @@ def generate(root: Path) -> None:
     for pkg in imports:
         version = get_installed_version(pkg)
         requirements.append(f"{pkg}=={version}" if version else pkg)
-    Path("requirements.txt").write_text(
+    (root / "requirements.txt").write_text(
         "\n".join(requirements) + "\n", encoding='utf-8'
     )
     viz(f"requirements.txt created with {len(requirements)} packages.")
-
+    return root / "requirements.txt"
 
 def main(args):
     if len(args) > 1:

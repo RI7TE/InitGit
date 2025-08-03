@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dotenv import find_dotenv, load_dotenv
-from pkg_resources import require
 
 
 load_dotenv(find_dotenv())
@@ -34,6 +33,7 @@ from enum import Enum
 from time import sleep
 
 from colorama import Fore, Style
+from util import generate
 from yarl import URL
 
 from _license import LICENSE_TEXT
@@ -151,14 +151,19 @@ class CommandError(Exception):
 
 
 class Command:
-    def __init__(self, command: str, cwd: Path | str | None = None):
+    """A class to compile and run shell commands."""
+
+    def __init__(self, command: str, cwd: Path | str | None = None, delay: float = 0):
         self.command = command
-        self.text = command.strip()
         self.cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-        self.args = shlex.split(self.command.strip())
+        self.text = shlex.quote(self.command.strip()).strip()
+        self.args = shlex.split(self.text)
         self.name = self.args[0]
         self.error_code = 0
         self.error = None
+        self.output = None
+        self.delay = delay
+        self._slept = False
 
     def __str__(self):
         return self.text
@@ -173,132 +178,160 @@ class Command:
         yield self.text
         yield self.args
         yield self.name
-        yield self.error_code
+        yield self.return_code
         yield self.error
+        yield self.output
 
     def __get__(self, instance, owner):
         """Get the command text."""
-        return self.text
+        return instance.text if instance.output is None else instance.output
 
     def __set__(self, instance, value):
         """Set the command text."""
         if isinstance(value, str):
-            self.command = value
-            self.text = shlex.quote(value.strip())
-            self.args = shlex.split(self.text)
-            self.name = self.args[0]
+            instance.command = value
+            instance.text = shlex.quote(value.strip()).strip()
+            instance.args = shlex.split(self.text)
+            instance.name = self.args[0]
         else:
             raise ValueError("Command must be a string.")
-        self.error_code = 0
-        self.error = None
+        instance.error_code = 0
+        instance.error = None
+
+    @property
+    def return_code(self):
+        """Get the return code of the command."""
+        return self.error_code
 
     def __enter__(self):
         """Enter the command context."""
+        self.run()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Exit the command context."""
         if exc_type is not None:
-            self.error_code = 1
+            self.error_code = exc_value.returncode if exc_value else 1
             self.error = exc_value
             print(
                 toterm(
                     f"Command '{self.command}' failed with error: {exc_value}", "red"
                 )
             )
-        return False
+            return False
+        if self.error_code != 0:
+            print(
+                toterm(
+                    f"Command '{self.command}' failed with error code: {self.error_code}",
+                    "red",
+                )
+            )
+            return False
+        print(toterm(f"Command '{self.command}' executed successfully.", "green"))
+        if not self._slept:
+            sleep(self.delay)
+            self._slept = True
+        return True
 
-    def __call__(self, *args, **kwargs):
-        with self:
-            extra_args = list(args) + [f"{k}={v}" for k, v in kwargs.items()]
-            full_cmd = self.args + list(map(str, extra_args))
-            return self.run(full_cmd)
+    def run(self) -> str:
+        """Run the command."""
 
-    def run(self, args=None) -> int | str:
-        if args is None:
-            args = self.args
         try:
             proc = sp.run(
-                args, check=True, capture_output=True, cwd=self.cwd, text=True
+                self.text,
+                check=True,
+                capture_output=True,
+                cwd=self.cwd,
+                shell=True,
+                text=True,
             )
+            self.args = shlex.split(proc.args)
+            if proc and proc.stderr:
+                print(toterm(f"Command stderr: {proc.stderr.strip()}", "yellow"))
+                self.error = proc.stderr.strip()
+            else:
+                self.error = None
+            self.output = proc.stdout.strip() if proc.stdout else None
+            self.error_code = proc.returncode or 0
+            if proc.stdout:
+                self.output = proc.stdout.strip()
             proc.check_returncode()
-
+            if self.error_code == 0:
+                print(
+                    toterm(f"Command '{self.command}' executed successfully.", "green")
+                )
         except sp.CalledProcessError as e:
-            print(toterm(f"Command failed: {e}"))
+            self.command = e.cmd
+            self.output = e.output
             self.error_code = e.returncode
             self.error = e
-            raise CommandError(self.text, e.returncode, error=self.error) from e
+            raise CommandError(self.command, self.error_code, error=self.error) from e
         except FileNotFoundError as e:
             self.error_code = e.errno
             self.error = e
-            print(toterm(f"Command Failed: {self.text}"), f"File not found: {e}")
+            self.output = f"File not found: 1. {e.filename}\n 2. {e.filename2}\t|\tOutput: {e.strerror}"
             raise CommandError(
-                self.text,
-                e.errno,
-                filename=e.filename,
-                other_filename=e.filename2,
+                self.command,
+                self.error_code,
+                output=self.output,
                 error=self.error,
             ) from e
         except Exception as e:
-            self.error_code = 1
+            self.error_code = 69
             self.error = e
-            print(toterm(f"An error occurred: {e}"))
-            raise CommandError(self.text, 1, error=self.error) from e
+            self.output = f"A generic error occurred in Command class: {e}"
+            raise CommandError(
+                self.command, self.error_code, error=self.error, output=self.output
+            ) from e
         else:
-            if proc and proc.stderr:
-                print(toterm(f"Command stderr: {proc.stderr.strip()}", "yellow"))
             if proc and proc.returncode == 0:
                 print(toterm(f"Command succeeded: {self.text}", "blue"))
-                return proc.stdout.strip()
-            self.error_code = proc.returncode if proc else 69
-            self.error = f"Command Error: {self.text} did not complete successfully."
-            raise CommandError(
-                self.text,
-                self.error_code,
-                toterm(f"Command failed with return code: {self.error_code}", "red"),
-                error=self.error,
+            return (
+                self.output
+                or f"Command '{self.text}' executed successfully: {list(self)}"
             )
 
         finally:
-            sleep(1)  # Give some time for the command to complete
+            if not self._slept:
+                sleep(self.delay)
+                self._slept = True
+            else:
+                print(
+                    toterm(
+                        f"Command Output: '{self.output}'\n Command {self.text} completed with return code: {self.error_code}",
+                        "green",
+                    )
+                )
 
 
-def cmd(command: str | Command, cwd: str | Path | None = None) -> int | str:
+@contextmanager
+def cmd(
+    command: str | Command, cwd: str | Path | None = None, **kwds
+) -> typing.Generator[Command, typing.Any, None]:
     """Run a shell command."""
-    proc = None
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    command = Command(command=command, cwd=cwd) if isinstance(command, str) else command
+    command = (
+        Command(command=command, cwd=cwd, **kwds)
+        if isinstance(command, str)
+        else command
+    )
 
     try:
         with command as com:
-            proc = com.run()
-            if isinstance(proc, int):
-                if proc != 0:
-                    print(toterm(f"Command failed with return code: {proc}", "red"))
-                    raise CommandError(com.text, proc, error=com.error)
-            elif isinstance(proc, str):
-                if proc:
-                    print(toterm(f"Command output: {proc}", "green"))
-                else:
-                    print(
-                        toterm("Command executed successfully with no output.", "blue")
-                    )
-            return proc
-    except CommandError as e:
-        print(toterm(f"Command Error: {e.message}", "red"))
-        if e.error_code == 1:
-            print(
-                toterm(
-                    "Command failed. Please check the command and try again.", "yellow"
-                )
-            )
-        raise e
+            if com.return_code != 0:
+                print(toterm(f"Command failed with return code: {com.output}", "red"))
+            else:
+                print(toterm(f"Command output: {com.output}", "green"))
+        yield command
+    except Exception as e:
+        raise CommandError from e
 
 
 def stamp_date() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
 # 1. In your project folder, initialize a git repo
-def init_git(cwd:Path | str | None = None,*, branch: str | None = None):
+def init_git(cwd: Path | str | None = None, *, branch: str | None = None):
     """Initialize a git repository in the current directory."""
     branch = shlex.quote(branch or "master").strip()
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
@@ -320,13 +353,25 @@ def pre_stage(
     gitignore_file = cwd / '.gitignore'
     readme_file = cwd / "README.md"
     license_file = cwd / "LICENSE.txt"
-    requirements_file = generate()
+    requirements_file = generate(cwd)
     if not gitignore_file.exists():
         gitignore_file.touch()
     if not readme_file.exists():
         readme_file.touch()
     if not license_file.exists():
         license_file.touch()
+    if not requirements_file.exists():
+        requirements_file.touch()
+        print(
+            toterm(
+                CommandError(
+                    cmd="generate requirements.txt",
+                    errcode=1,
+                    stage="PRE-STAGE",
+                    message="Failed to populate requirements.txt file",
+                )
+            )
+        )
     try:
         gitignore_file.write_text(f'{GIT_IGNORE.strip()}')
         readme_file.write_text(f'{repo_name.strip()}\n{description.strip()}')
@@ -334,7 +379,7 @@ def pre_stage(
     except Exception as e:
         raise CommandError(cmd=" ".join(e.args), errcode=2, stage="PRE-STAGE") from e
 
-    print(f"Pre-stage files created in {cwd}")
+    print(toterm(f"Pre-stage files created in {cwd}", "green"))
     return True, repo_name
 
 
@@ -342,48 +387,74 @@ def pre_stage(
 def stage(cwd: Path | str | None = None):
     """Stage all files in the current directory."""
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    return cmd(f"git add {cwd}", cwd=cwd)
+    return cmd(f"git add {cwd}", cwd=cwd, delay=1)
 
 
-def commit(cwd: Path | str | None = None, message: str | None = None):
+def commit_message(cwd: Path | str | None = None, message: str | None = None):
     """Commit staged files with a message. Commits the tracked changes and prepares them to be pushed to a remote repository."""
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
     message = shlex.quote(
         message or input(f"Enter commit message <DEFAULT:'{stamp_date()}'>: ")
     ).strip()
-    if not GITDIR.exists():
-        print(
-            toterm(
-                "No git repository found. Please initialize a git repository first.",
-                "red",
-            )
-        )
-        raise CommandError("git init", 1, "No git repository found.")
-    if MSGFILE.exists():
-        messages = shlex.split(
-            shlex.quote(MSGFILE.read_text().strip() if MSGFILE.exists() else "")
-        )
-        if (
-            message in messages
-            or message in [m.strip() for m in messages]
-            or not message
-        ):
+    try:
+        if not GITDIR.exists():
             print(
                 toterm(
-                    f"Commit message already exists or no message: {message}", "yellow"
+                    "No git repository found. Please initialize a git repository first.",
+                    "red",
                 )
             )
-            message = shlex.quote(
-                input("Enter a new commit message: ").strip()
-            ) or dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
-            return commit(cwd=cwd, message=message)
-    message = message or stamp_date()
+            raise CommandError(
+                "initgit commit",
+                69,
+                "No git repository found on disk.",
+                message="No git repository found on disk.",
+            )
+        if MSGFILE.exists():
+            messages = shlex.split(
+                shlex.quote(
+                    MSGFILE.read_text().strip() if MSGFILE.exists() else ""
+                ).strip()
+            )
+            if (
+                message in messages
+                or message in [m.strip() for m in messages]
+                or not message
+            ):
+                print(
+                    toterm(
+                        f"Commit message already exists or no message: {message}",
+                        "yellow",
+                    )
+                )
+                message = (
+                    shlex.quote(input("Enter a new commit message: ").strip()).strip()
+                    or dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S").strip()
+                )
+                commit_message(cwd=cwd, message=message)
+        message = message.strip() or stamp_date().strip()
+    except ValueError as e:
+        print(toterm(f"Invalid commit message: {e}", "red"))
+        message = shlex.quote(input("Enter a valid commit message: ").strip()).strip()
+        if not message:
+            print(toterm("No commit message provided. Aborting commit.", "yellow"))
+            sys.exit(1)
+    else:
+        return message
+
+from contextlib import _GeneratorContextManager
+def commit(
+    cwd: Path | str | None = None, message: str | None = None
+) -> _GeneratorContextManager[Command, None, None]:
+    message = commit_message(cwd=cwd, message=message)
     try:
-        return cmd(f"git commit -a -m '{message}'", cwd=cwd)
+        command = cmd(f"git commit -a -m '{message}'", cwd=cwd, delay=2)
     except CommandError as e:
         print(toterm(f"Commit failed: {e.message}", "red"))
-        if e.error_code == 1:
-            print(toterm("No changes to commit. Please stage files first.", "yellow"))
+        print(toterm(f"No changes to commit. Please stage files first: {e}", "yellow"))
+        raise e from e
+    else:
+        return command
 
 
 def initialize(
@@ -393,22 +464,31 @@ def initialize(
     branch: str | None = None,
 ) -> tuple[str, str]:
     """Initialize a git repository, create pre-stage files, and commit them."""
+    _results = []
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
     username = shlex.quote(
         input(f"Enter your GitHub username <DEFAULT: {GIT_USERNAME}: ").strip()
         or GIT_USERNAME
-    )
-    init_git(cwd, branch=branch)
-    sleep(1)
+    ).strip()
+    with init_git(cwd, branch=branch) as com:
+        _results.append(com.output)
     staged, repo_name = pre_stage(cwd, description=description)
-    sleep(0.5)
+    sleep(1)
     if staged:
-        stage(cwd)
-        sleep(0.5)
-        commit(cwd, message=message)
-        sleep(0.5)
+        with stage(cwd) as com:
+            _results.append(com)
+        with commit(cwd, message=message) as com:
+            _results.append(com)
+    if all(i.return_code == 0 for i in _results):
         return username, repo_name
     print(toterm("Pre-stage failed. Aborting commit context."))
+    for i in _results:
+        print(
+            toterm(
+                f"Command: {i.text} | Output: {i.output} | Return Code: {i.return_code}",
+                "red",
+            )
+        )
     raise CommandError("initialize", 1, "Pre-stage failed. Aborting commit context.")
 
 
@@ -445,13 +525,15 @@ def _reset_stage(filename: str | Path | None = None, cwd: Path | str | None = No
     if not filename:
         print(toterm("No filename provided. Aborting reset stage."))
         return None
-    return cmd(f"git reset HEAD {filename}", cwd=cwd)
+    with cmd(f"git reset HEAD {filename}", cwd=cwd) as com:
+        return com.output
 
 
 def _reset_commit(cwd: Path | str | None = None):
     """To remove this commit and modify the file. You can then commit and add the file again."""
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    cmd('git reset --soft HEAD~1')
+    with cmd('git reset --soft HEAD~1') as com:
+        return com.output
 
 
 def reset(cwd: Path | str | None = None, filename: str | Path | None = None):
@@ -478,33 +560,34 @@ def reset(cwd: Path | str | None = None, filename: str | Path | None = None):
 
 
 def _repo_command(
-    cwd:str | Path | None,*,
-    visibility:Visibility | None = None,
-    username:str | None = None,
-    repo_name:str | None = None,
-    interactive:bool = False,
-    remote_name:str | None = None,
-    description:str | None = None,
-    url:str | URL | None = None
-    ) -> str:
+    cwd: str | Path | None,
+    *,
+    visibility: Visibility | None = None,
+    username: str | None = None,
+    repo_name: str | None = None,
+    interactive: bool = False,
+    remote_name: str | None = None,
+    description: str | None = None,
+    url: str | URL | None = None,
+) -> str:
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
     base_cmd = "gh repo create "
     if interactive:
         return base_cmd
-    repo_name = shlex.quote(repo_name.strip()) if repo_name else cwd.name.title()
-    full_repo_name = f"{username}/{repo_name}" if username else repo_name
+    repo_name = shlex.quote(repo_name.strip()).strip() if repo_name else cwd.name
+    full_repo_name = (
+        f"{shlex.quote(username).strip()}/{repo_name}" if username else repo_name
+    )
     base_cmd += f" {full_repo_name}"
 
     visibility = visibility or Visibility.PUBLIC
-
-    base_cmd += f" --source='{shlex.quote(str(cwd))}'"
-    base_cmd += f" --{visibility.value}"
+    base_cmd += f" --source={cwd} --{visibility.value}"
     if remote_name:
-        base_cmd += f" --remote={shlex.quote(remote_name.strip())}"
+        base_cmd += f" --remote={shlex.quote(remote_name.strip()).strip()}"
     if description:
-        base_cmd += f" --description={shlex.quote(description.strip())}"
+        base_cmd += f" --description={shlex.quote(description.strip()).strip()}"
     if url:
-        base_cmd += f" --homepage={shlex.quote(str(url).strip())}"
+        base_cmd += f" --homepage={shlex.quote(str(url).strip()).strip()}"
     return base_cmd
 
 
@@ -516,29 +599,34 @@ def update_repo(
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
     cmds = [
         f"git add {filename or cwd}",
-        f"git commit -m '{message}'  {shlex.quote(str(filename).strip())}"
+        f"git commit -m '{shlex.quote(message).strip().strip() if message else stamp_date().strip()}'  {shlex.quote(str(filename).strip()).strip()}"
         if filename
-        else f"git commit -a -m '{message}'",
+        else f"git commit -a -m '{shlex.quote(message.strip() if message else stamp_date()).strip()}'",
         "git branch -M master",
         "git push -u origin master",
     ]
     try:
         for command in cmds:
-            result = cmd(command, cwd=cwd)
-            if isinstance(result, int) and result != 0:
-                print(
-                    toterm(
-                        f"Command failed: {command} with return code {result}", "red"
+            with cmd(command, cwd=cwd, delay=2) as result:
+                if result.return_code != 0:
+                    raise CommandError(
+                        command,
+                        result.return_code,
+                        f"Command '{command}' failed with error: {result.error}",
                     )
-                )
-                raise CommandError(
-                    command,
-                    result,
-                    f"Failed to update repository in {cwd}. Check the command and try again.",
-                )
+                print(toterm(f"Command '{command}' executed successfully.", "green"))
     except CommandError as e:
         print(toterm(f"Command Error: {e.message}", "red"))
-        raise e
+        raise CommandError(
+            e.command,
+            e.error_code,
+            f"Failed to update repository {filename or cwd.name}. Check the commands and try again.",
+        ) from e
+    else:
+        print(
+            toterm(f"Repository {filename or cwd.name} updated successfully.", "green")
+        )
+        return "\n".join(cmds)
 
 
 def create_repo(
@@ -553,88 +641,62 @@ def create_repo(
     remote: str | None = None,
     url: URL | str | None = None,
     interactive: bool = False,
-
-
 ):
-    _results = []
     """Create a remote GitHub repository and add it as a remote."""
     # This assumes you have the GitHub CLI installed and authenticated
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    with commit_context(cwd, description=description, message=message, branch=branch) as (uname, rname):
-        repo_name=repo_name or rname
-        username=username or uname
-        backupcmds = [
-            f"git remote add origin https://github.com/{username}/{repo_name}.git",
-            "git branch -M master",
-            "git push -u origin master",
-        ]
+    with commit_context(
+        cwd, description=description, message=message, branch=branch
+    ) as (uname, rname):
+        repo_name = repo_name or rname
+        username = username or uname
         try:
-            repo_cmd = _repo_command(cwd, username=username , repo_name=repo_name, visibility=visibility, remote_name=remote, description=description, url=url, interactive=interactive)
-            command = cmd(repo_cmd, cwd)
-            sleep(0)
-            _results.append((" ".join(repo_cmd.split(" ")[:1]), command))
+            repo_cmd = _repo_command(
+                cwd,
+                username=username,
+                repo_name=repo_name,
+                visibility=visibility,
+                remote_name=remote,
+                description=description,
+                url=url,
+                interactive=interactive,
+            )
+            with cmd(repo_cmd, cwd, delay=3) as com:
+                return com.output
         except CommandError as e:
             print(toterm(f"Command failed: {e.message}", "red"))
-            _results.append((e.command, e))
-            if isinstance(e, CommandError) and e.error_code == 1:
+            return alternate_commands(repo_name=repo_name, username=username)
 
-                try:
 
-                    print(toterm("trying alternate", "yellow"))
-                    commands = [cmd(c) for c in backupcmds]
-                    sleep(0)
-                    _results.extend(commands)
-                except CommandError as e:
-                    print(toterm(f"Backup commands failed: {e.message}", "red"))
-                    _results.append((e.command, e))
-                    other_cmds = ["git branch -M master ", "git push -u origin master"]
-                    try:
-                        for c in other_cmds:
-                            r = cmd(c, cwd)
-                            sleep(0)
-                            _results.append((c, r))
-                    except CommandError as e:
-                        print(toterm(f"Command failed: {e.message}", "red"))
-                        _results.append((e.command, e))
-                        if isinstance(e, CommandError) and e.error_code == 1:
-                            print(
-                                toterm(
-                                    f"Failed to create remote repository {repo_name if repo_name else rname}. Check the commands and try again.",
-                                    "red",
-                                )
-                            )
-                        raise CommandError(
-                            e.command,
-                            e.error_code,
-                            f"Failed to create remote repository {repo_name if repo_name else rname}. Check the commands and try again.",
-                        ) from e
-    if all(isinstance(r[1], int) and r[1] == 0 for r in _results):
-        print(toterm(f"Repository {repo_name if repo_name else rname} created and added as origin.", "green"))
+def alternate_commands(repo_name: str | None = None, username: str | None = None):
+    _results = []
+    backupcmds = [
+        f"git remote add origin https://github.com/{username}/{repo_name}.git",
+        "git branch -M master",
+        "git push -u origin master",
+    ]
+    try:
+        print(toterm("trying alternate", "yellow"))
+        commands = [cmd(c) for c in backupcmds]
+        for command in commands:
+            with command as com:
+                _results.append(com.output)
+                if com.return_code != 0:
+                    raise CommandError(
+                        com.command,
+                        com.return_code,
+                        f"Command '{com.command}' failed with error: {com.error}",
+                    )
+                print(
+                    toterm(f"Command '{com.command}' executed successfully.", "green")
+                )
+    except CommandError as e:
+        print(toterm(f"Backup commands failed: {e.message}", "red"))
+        _results.append((e.command, e))
     else:
-        print(
-            toterm(
-                f"Failed to create local and remote repository {repo_name if repo_name else rname}. Check the commands and try again."
-            )
-        )
-        for i, r in enumerate(_results):
-            if isinstance(r[1], int) and r[1] != 0:
-                _results.insert(i,CommandError(r[0], r[1]))
-                _results.pop(i + 1)
-    if _results:
-        print(
-            toterm(
-                f"{len(_results)} Commands executed successfully out of {len(_results)}:", "magenta"
-            )
-        )
-        print("Commands executed:")
-        for command, result in _results:
-            if isinstance(result, CommandError):
-                print(toterm(f"Error: {result}"))
-            else:
-                print(toterm(f"{command} -> {result}", "green"))
-    if not _results:
-        print(toterm("No commands executed successfully. Check the output above for errors."))
-    return "\n".join(_results)
+        print(toterm("Backup commands executed successfully.", "green"))
+        return " ".join(_results)
+
 
 # 4. Create an empty repo on GitHub, then add it as remote
 # 5. In VS Code, use the Source Control tab to see changes, stage, unstage, commit, and push
