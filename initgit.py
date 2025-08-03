@@ -660,16 +660,16 @@ def main_init(args:argparse.Namespace, parser: argparse.ArgumentParser):
     if args.function_selector in [Selector._GIT_INIT.value, Selector._PRE_STAGE.value, Selector._STAGE.value, Selector._COMMIT.value, Selector._STATUS.value, Selector._LOG.value, Selector._BRANCH.value, Selector._DIFF.value, Selector.PUSH.value, Selector.PULL.value, Selector.FETCH.value, Selector.UNCOMMIT.value, Selector.DISCARD.value, Selector.REVERT.value, Selector.HARD_RESET.value, Selector.COMMIT.value, Selector._VARS.value]:
         single_init(args, cwd=CURRENT_DIR, parser=parser)
     elif args.function_selector == Selector.INIT.value:
-        username, repo_name = initialize(
+        username, repo_name,description = initialize(
             CURRENT_DIR,
             description=args.description,
             message=args.message,
             branch=args.branch,
         )
-        if username and repo_name:
+        if username and repo_name and description:
             print(
                 toterm(
-                    f"Initialized git repository in {CURRENT_DIR} with username: {username} and repo name: {repo_name}",
+                    f"Initialized git repository in {CURRENT_DIR} with username: {username} and repo name: {repo_name} and description: {description}",
                     "blue",
                 )
             )
