@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 from contextlib import contextmanager
 from time import sleep
 
-from util import toterm
+from util import toterm,viz
 
 
 CURRENT_DIR = Path.cwd().absolute()
@@ -93,8 +93,7 @@ class Command:
 
     def __enter__(self):
         """Enter the command context."""
-        self.run()
-        return self
+        return self.run()
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Exit the command context."""
@@ -121,12 +120,12 @@ class Command:
             self._slept = True
         return True
 
-    def run(self) -> str:
+    def run(self) -> Command:
         """Run the command."""
 
         try:
             proc = sp.run(
-                self.text,
+                self.command,
                 check=True,
                 capture_output=True,
                 cwd=self.cwd,
@@ -145,12 +144,14 @@ class Command:
                 )
             proc.check_returncode()
         except sp.CalledProcessError as e:
+            viz(f"Command Error: {e}")
             self.command = e.cmd
-            self.output = e.output
+            self.output = e.output.strip() if e.output else e.stderr.strip()
             self.error_code = e.returncode
-            self.error = e
+            self.error = e.stderr.strip()
             raise CommandError(self.command, self.error_code, error=self.error) from e
         except FileNotFoundError as e:
+            viz(f"Command Error: {e}")
             self.error_code = e.errno
             self.error = e
             self.output = f"File not found: 1. {e.filename}\n 2. {e.filename2}\t|\tOutput: {e.strerror}"
@@ -161,6 +162,7 @@ class Command:
                 error=self.error,
             ) from e
         except Exception as e:
+            viz(f"Command Error: {e}")
             self.error_code = 69
             self.error = e
             self.output = f"A generic error occurred in Command class: {e}"
@@ -170,11 +172,11 @@ class Command:
         else:
             if proc and proc.returncode == 0:
                 print(toterm(f"Command succeeded: {self.text}", "blue"))
-            return (
-                self.output
-                or f"Command '{self.text}' executed successfully: {list(self)}"
-            )
-
+            #return (
+            #    self.output
+            #    or f"Command '{self.text}' executed successfully: {list(self)}"
+            #)
+            return self
         finally:
             if not self._slept:
                 sleep(self.delay)
@@ -196,6 +198,43 @@ def cmd(
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
 
     try:
-        yield Command(command=command, cwd=cwd, **kwds)
+        with Command(command=command, cwd=cwd, **kwds) as comm:
+            yield comm
+    except sp.CalledProcessError as e:
+        raise CommandError(
+            command=e.cmd, errcode=e.returncode, error=e.stderr.strip() if e.stderr else e.output, stdout=e.stdout.strip() if e.stdout else None, stderr=e.stderr.strip() if e.stderr else None, output=e.output.strip() if e.output else None
+        ) from e
     except Exception as e:
-        raise CommandError from e
+        raise e from e
+
+
+def test_fixture(command:str):
+    """Test the Command class."""
+    with cmd(f"{command}", cwd=CURRENT_DIR,delay=1) as c:
+        viz(f"Command: {c.command}")
+        viz("TEXT: ",c.text)
+        viz("ARGS: ",c.args)
+        viz("OUTPUT: ",c.output)
+        viz("Error", c.error)
+        viz("RETURN CODE: ", c.return_code)
+        viz("Error-Code", c.error_code)
+        viz(f"Working Directory: {c.cwd}")
+        print()
+    return c
+def test_command():
+    test_fixture("pwd")
+    test_fixture("ls")
+    test_fixture("echo 'Hello, World!'")
+    test_fixture("date")
+    test_fixture("whoami")
+    try:
+        test_fixture("non_existent_command")
+    except CommandError as e:
+        viz(f"Command failed: {e}")
+
+
+if __name__ == "__main__":
+    test_command()
+    viz("All tests passed.")
+else:
+    viz("Command module loaded. Use 'test_command()' to run tests.")

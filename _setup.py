@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
-
+from contextlib import contextmanager
 
 sys.path.append(str(Path(__file__).absolute().parent))
 if TYPE_CHECKING:
@@ -260,9 +260,10 @@ def program_setup(
     )
     setup_instance.generate_setup_py()
 
+@contextmanager
 def setup_context(program_name: str, cwd: Path | str | None = None):
     """Context manager for setting up a Python package."""
-    return SetUp(name=program_name, cwd=cwd)
+    yield SetUp(name=program_name, cwd=cwd)
 
 
 def main():
