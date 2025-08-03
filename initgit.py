@@ -116,7 +116,7 @@ def pre_stage(
 ) -> tuple[bool, str]:
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
     repo_name = shlex.quote(
-        input(f"Enter the name of the repository <DEFAULT: {cwd.name.title()}: ")
+        input(f"Enter the name of the repository <DEFAULT: {cwd.name}: ")
         or cwd.name.title()
     ).strip()
     description = shlex.quote(
@@ -203,7 +203,7 @@ def commit_message(cwd: Path | str | None = None, message: str | None = None):
                     shlex.quote(input("Enter a new commit message: ").strip()).strip()
                     or dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S").strip()
                 )
-                commit_message(cwd=cwd, message=message)
+                return commit_message(cwd=cwd, message=message)
         message = message.strip() or stamp_date().strip()
     except ValueError as e:
         print(toterm(f"Invalid commit message: {e}", "red"))
@@ -222,13 +222,11 @@ def commit(
 ) -> _GeneratorContextManager[Command, None, None]:
     message = commit_message(cwd=cwd, message=message)
     try:
-        command = cmd(f"git commit -a -m '{message}'", cwd=cwd, delay=2)
+        return cmd(f"git commit -a -m '{message}'", cwd=cwd, delay=2)
     except CommandError as e:
         print(toterm(f"Commit failed: {e.message}", "red"))
         print(toterm(f"No changes to commit. Please stage files first: {e}", "yellow"))
         raise e from e
-    else:
-        return command
 
 
 def initialize(
@@ -587,7 +585,7 @@ def single_init(args:argparse.Namespace,parser: argparse.ArgumentParser,cwd:Path
         stage(cwd=cwd)
         print(toterm(f"Files staged in {cwd}", "cyan"))
     elif args.function_selector in [Selector._COMMIT.value, Selector.COMMIT.value]:
-        msg = shlex.quote(args.message if args.message else input("Enter commit message: ")).strip()
+        msg = shlex.quote(args.message or input("Enter commit message: ")).strip()
         commit(cwd=cwd, message=msg)
         print(toterm(f"Changes committed in {cwd} with message: {msg}", "yellow"))
     elif args.function_selector == Selector._STATUS.value:

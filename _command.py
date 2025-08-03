@@ -2,8 +2,10 @@ from __future__ import annotations
 import shlex
 import subprocess as sp
 import sys
+
 from pathlib import Path
 from typing import TYPE_CHECKING
+
 
 sys.path.append(str(Path(__file__).absolute().parent))
 if TYPE_CHECKING:
@@ -11,7 +13,9 @@ if TYPE_CHECKING:
 
 from contextlib import contextmanager
 from time import sleep
+
 from util import toterm
+
 
 CURRENT_DIR = Path.cwd().absolute()
 
@@ -32,7 +36,7 @@ class CommandError(Exception):
         self.args = args
 
     def __str__(self):
-        return f"CommandError: {self.message}"
+        return f"CommandError: {list(iter(self))}"
 
     def __iter__(self):
         """Iterate over the error message."""
@@ -76,21 +80,11 @@ class Command:
         yield self.error
         yield self.output
 
-    def __get__(self, instance, owner):
-        """Get the command text."""
-        return instance.text if instance.output is None else instance.output
+    #    def __get__(self, instance, owner):
+    #        """Get the command text."""
+    #        return instance.text if instance.output is None else instance.output
+    #
 
-    def __set__(self, instance, value):
-        """Set the command text."""
-        if isinstance(value, str):
-            instance.command = value
-            instance.text = shlex.quote(value.strip()).strip()
-            instance.args = shlex.split(self.text)
-            instance.name = self.args[0]
-        else:
-            raise ValueError("Command must be a string.")
-        instance.error_code = 0
-        instance.error = None
 
     @property
     def return_code(self):
@@ -143,17 +137,13 @@ class Command:
             if proc and proc.stderr:
                 print(toterm(f"Command stderr: {proc.stderr.strip()}", "yellow"))
                 self.error = proc.stderr.strip()
-            else:
-                self.error = None
-            self.output = proc.stdout.strip() if proc.stdout else None
-            self.error_code = proc.returncode or 0
-            if proc.stdout:
-                self.output = proc.stdout.strip()
-            proc.check_returncode()
+            self.output = proc.stdout.strip() if proc.stdout else proc.stderr.strip()
+            self.error_code = proc.returncode
             if self.error_code == 0:
                 print(
                     toterm(f"Command '{self.command}' executed successfully.", "green")
                 )
+            proc.check_returncode()
         except sp.CalledProcessError as e:
             self.command = e.cmd
             self.output = e.output
@@ -216,6 +206,6 @@ def cmd(
                 print(toterm(f"Command failed with return code: {com.output}", "red"))
             else:
                 print(toterm(f"Command output: {com.output}", "green"))
-        yield command
+            yield com
     except Exception as e:
         raise CommandError from e
