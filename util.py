@@ -23,6 +23,9 @@ from pathlib import Path
 
 from colorama import Fore, Style
 
+def stamp_date() -> str:
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
 
 def _color(color: str) -> str:
     """Convert color name to colorama color."""
@@ -71,10 +74,10 @@ def viz(
                 f.write(log_msg + '\n')
             yield f
         if sys.stdout.isatty():
-            print(Fore.BLACK + f"Logged to {log_file}" + Style.RESET_ALL, flush=True)
+            print(f"{Fore.BLACK}Logged to {log_file}{Style.RESET_ALL}", flush=True)
         else:
             print(
-                Fore.YELLOW + f"Warning: Logged to {log_file}" + Style.RESET_ALL,
+                f"{Fore.YELLOW}Warning: Logged to {log_file}{Style.RESET_ALL}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -83,8 +86,8 @@ def viz(
         if to_log:
             with _log() as f:
                 print(
-                    log_msg if not term else msg,
-                    file=f if not term else sys.stderr,
+                    msg if term else log_msg,
+                    file=sys.stderr if term else f,
                     flush=True,
                 )
         else:
@@ -92,8 +95,8 @@ def viz(
     elif to_log:
         with _log() as f:
             print(
-                log_msg if not term else msg,
-                file=f if not term else sys.stderr,
+                msg if term else log_msg,
+                file=sys.stderr if term else f,
                 flush=True,
             )
     elif sys.stdout.isatty():
@@ -103,7 +106,7 @@ def viz(
     else:
         # Fallback to stderr if stdout is not a terminal
         print(
-            Fore.YELLOW + "Warning: Not printing to stdout" + Style.RESET_ALL,
+            f"{Fore.YELLOW}Warning: Not printing to stdout{Style.RESET_ALL}",
             file=sys.stderr,
             flush=True,
         )
@@ -111,6 +114,24 @@ def viz(
         sys.stderr.flush()
 
     return _msg.strip()
+
+
+def toterm(x, color: str = "red"):
+    if color == "red":
+        return Fore.RED + Style.BRIGHT + x + Style.RESET_ALL
+    if color == "blue":
+        return Fore.BLUE + Style.BRIGHT + x + Style.RESET_ALL
+    if color == "green":
+        return Fore.GREEN + Style.BRIGHT + x + Style.RESET_ALL
+    if color == "yellow":
+        return Fore.YELLOW + Style.BRIGHT + x + Style.RESET_ALL
+    if color == "magenta":
+        return Fore.MAGENTA + Style.BRIGHT + x + Style.RESET_ALL
+    if color == "cyan":
+        return Fore.CYAN + Style.BRIGHT + x + Style.RESET_ALL
+    if color == "white":
+        return Fore.WHITE + Style.BRIGHT + x + Style.RESET_ALL
+    return Fore.BLACK + Style.BRIGHT + x + Style.RESET_ALL
 
 
 # Directories to skip
@@ -239,14 +260,14 @@ def get_installed_version(pkg: str) -> str | None:
         return None
     return None
 
-def generate(root: Path) -> Path:
+def generate_requirements(root: Path) -> list[str]:
     root = root or Path.cwd()
     if requirements_exists(root):
         viz(
             "requirements.txt already exists. Skipping file generation. If you want to retry, delete the requirements.txt file in the working directory.",
             color='yellow',
         )
-        return root / "requirements.txt"
+        # return root / "requirements.txt"
     if package_name := find_top_package_name(root):
         imports = find_imports(root, package_name)
     else:
@@ -255,21 +276,51 @@ def generate(root: Path) -> Path:
     for pkg in imports:
         version = get_installed_version(pkg)
         requirements.append(f"{pkg}=={version}" if version else pkg)
+    return sorted(requirements)
+
+
+def generate(root: Path) -> Path:
+    requirements = generate_requirements(root or Path.cwd())
     (root / "requirements.txt").write_text(
         "\n".join(requirements) + "\n", encoding='utf-8'
     )
     viz(f"requirements.txt created with {len(requirements)} packages.")
     return root / "requirements.txt"
 
-def main(args):
-    if len(args) > 1:
-        root = Path(args[1])
-        if not root.is_dir():
-            viz(f"Error: {root} is not a directory.", color='red')
-            sys.exit(1)
-    else:
-        root = Path.cwd()
-    generate(root)
 
-if __name__ == "__main__":
-    main(sys.argv)
+# finding local packages and modules
+def find_packages(base_dir: Path):
+    """Find all Python packages (directories with __init__.py)."""
+    packages = []
+    for path in base_dir.rglob('__init__.py'):
+        # Skip unwanted dirs
+        if any(skip in path.parts for skip in SKIP_DIRS):
+            continue
+        pkg = ".".join(path.parent.relative_to(base_dir).parts)
+        packages.append(pkg)
+    return sorted(packages)
+
+
+def find_py_modules(base_dir: Path):
+    """Find all standalone Python modules (not part of a package)."""
+    modules = []
+    modules.extend(
+        py_file.stem
+        for py_file in base_dir.glob("*.py")
+        if py_file.is_file() and py_file.name != '__init__.py'
+    )
+    return sorted(modules)
+
+
+def get_packages_modules(cwd: Path | None = None) -> dict[str, list[str]]:
+    base_dir = Path.cwd()
+    packages = find_packages(base_dir)
+    py_modules = find_py_modules(base_dir)
+
+    print("# For setup.py")
+    print(f"packages={packages}")
+    print(f"py_modules={py_modules}")
+    return {
+        "packages": packages,
+        "modules": py_modules,
+    }
