@@ -72,6 +72,7 @@ LICENSE = shlex.quote(LICENSE_TEXT.strip()).strip()
 
 
 class Selector(Enum):
+    _SETUP = "0"
     _GIT_INIT = '1'
     _PRE_STAGE = '2'
     _STAGE = "3"
@@ -82,6 +83,7 @@ class Selector(Enum):
     _DIFF = "8"
     _VARS = "9"
     INIT = "init"
+    SETUP = "setup"
     CREATE = "create"
     ADD = "add"
     UPDATE = "update"
@@ -116,11 +118,11 @@ def pre_stage(
 ) -> tuple[bool, str]:
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
     repo_name = shlex.quote(
-        input(f"Enter the name of the repository <DEFAULT: {cwd.name}: ")
-        or cwd.name.title()
+        input(f"Enter the name of the repository <DEFAULT: {cwd.name}: ").strip()
+        or cwd.name
     ).strip()
     description = shlex.quote(
-        description or input("Enter a description for the repository: ")
+        description or input("Enter a description for the repository: ").strip()
     ).strip()
     gitignore_file = cwd / '.gitignore'
     readme_file = cwd / "README.md"
@@ -165,9 +167,16 @@ def stage(cwd: Path | str | None = None):
 def commit_message(cwd: Path | str | None = None, message: str | None = None):
     """Commit staged files with a message. Commits the tracked changes and prepares them to be pushed to a remote repository."""
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    message = shlex.quote(
-        message or input(f"Enter commit message <DEFAULT:'{stamp_date()}'>: ")
-    ).strip()
+    message = (
+        shlex.quote(
+            message.strip()
+            if message
+            else input(
+                f"Enter commit message <DEFAULT:'Updated by {GIT_USERNAME} on {stamp_date()}'>: "
+            ).strip()
+        ).strip()
+        or f'Updated by {GIT_USERNAME} on {stamp_date()}'.strip()
+    )
     try:
         if not GITDIR.exists():
             print(
@@ -184,25 +193,20 @@ def commit_message(cwd: Path | str | None = None, message: str | None = None):
             )
         if MSGFILE.exists():
             messages = shlex.split(
-                shlex.quote(
-                    MSGFILE.read_text().strip() if MSGFILE.exists() else ""
-                ).strip()
-            )
+                MSGFILE.read_text().strip() if MSGFILE.exists() else ""
+                )
             if (
                 message in messages
-                or message in [m.strip() for m in messages]
+                or message.strip() in [m.strip() for m in messages]
                 or not message
             ):
                 print(
                     toterm(
-                        f"Commit message already exists or no message: {message}",
+                        f"Commit message already exists or no message: {message.strip()}",
                         "yellow",
                     )
                 )
-                message = (
-                    shlex.quote(input("Enter a new commit message: ").strip()).strip()
-                    or dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S").strip()
-                )
+                message =  shlex.quote(input("Enter a new commit message: ").strip()).strip() or f"Updated by {GIT_USERNAME} @ {stamp_date().strip()}"
                 return commit_message(cwd=cwd, message=message)
         message = message.strip() or stamp_date().strip()
     except ValueError as e:
@@ -234,14 +238,18 @@ def initialize(
     description: str | None = None,
     message: str | None = None,
     branch: str | None = None,
+    *,
+    args: argparse.Namespace | None = None,
 ) -> tuple[str, str, str]:
     """Initialize a git repository, create pre-stage files, and commit them."""
+    global GIT_USERNAME, CURRENT_DIR
     _results = []
-    cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
+    CURRENT_DIR = Path(cwd).absolute()
     username = shlex.quote(
         input(f"Enter your GitHub username <DEFAULT: {GIT_USERNAME}: ").strip()
         or GIT_USERNAME
     ).strip()
+    GIT_USERNAME = username
     description = shlex.quote(
         description or input("Enter a description for the repository: ")
     ).strip()
@@ -249,6 +257,8 @@ def initialize(
         _results.append(com.output)
     staged, repo_name = pre_stage(cwd, description=description)
     sleep(1)
+    if args:
+        setup(args)
     if staged:
         with stage(cwd) as com:
             _results.append(com)
@@ -264,19 +274,38 @@ def initialize(
                 "red",
             )
         )
-    raise CommandError("initialize", 1, "Pre-stage failed. Aborting commit context.")
+    raise CommandError(
+        "initialize",
+        1,
+        "Pre-stage failed. Aborting commit context:  {'\n'.join(_results)}",
+    )
 
-
+def setup(args: argparse.Namespace, cwd: Path | str | None = None):
+    """Setup the project with a setup.py file and other configurations."""
+    cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
+    with setup_context(program_name=args.repo_name or cwd.name, cwd=cwd) as setup:
+        setup.packages_modules.root = cwd
+        setup.description = args.description
+        setup.author = __author__ or GIT_USERNAME
+        setup.author_email = args.author_email or __email__
+        setup.version = args.version or __version__
+        setup.license = args.license_type or __license__
+        setup.download_url = (
+            args.url
+            or f"https://github.com/{GIT_USERNAME}/{args.repo_name or cwd.name}.git"
+        )
 @contextmanager
 def commit_context(
     cwd: Path,
     description: str | None = None,
     message: str | None = None,
     branch: str | None = None,
+    *,
+    args: argparse.Namespace,
 ) -> typing.Generator[tuple[str | None, str | None, str | None]]:
     """Context manager to prepare for staging files."""
     if username_reponame_description := initialize(
-        cwd, description=description, message=message, branch=branch
+        cwd, description=description, message=message, branch=branch, args=args
     ):
         yield username_reponame_description
     else:
@@ -356,6 +385,10 @@ def _repo_command(
     base_cmd += f" {full_repo_name}"
 
     visibility = visibility or Visibility.PUBLIC
+    if visibility not in Visibility:
+        raise ValueError(
+            f"Invalid visibility: {visibility}. Must be one of {[v.value for v in Visibility]}."
+        )
     base_cmd += f" --source={cwd} --{visibility.value}"
     if remote_name:
         base_cmd += f" --remote={shlex.quote(remote_name.strip()).strip()}"
@@ -407,6 +440,7 @@ def update_repo(
 def create_repo(
     cwd: Path | str | None = None,
     *,
+    args: argparse.Namespace,
     username: str | None = None,
     repo_name: str | None = None,
     branch: str | None = None,
@@ -416,29 +450,42 @@ def create_repo(
     remote: str | None = None,
     url: URL | str | None = None,
     interactive: bool = False,
-    author: str | None = None,
-    author_email: str | None = None,
-    version: str | None = None,
-    license_type: str | None = None,
+    author: str | None = __author__,
+    author_email: str | None = __email__,
+    version: str | None = __version__,
+    license_type: str | None = __license__,
 ):
     """Create a remote GitHub repository and add it as a remote."""
     # This assumes you have the GitHub CLI installed and authenticated
+    global GIT_USERNAME, CURRENT_DIR, __email__, __author__, __version__, __license__
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
+    CURRENT_DIR = cwd
+    username = args.username or username
+    repo_name = args.repo_name or repo_name
+    description = args.description or description
+    message = args.message or message
+    branch = args.branch or branch
+    visibility = args.visibility or visibility
+    remote = args.remote or remote
+    url = str(args.url or url)
+    interactive = args.interactive or interactive
+    __author__ = str(args.author or author)
+    args.author = shlex.quote(__author__.strip()).strip()
+    __email__ = str(args.author_email or author_email)
+    args.author_email = shlex.quote(__email__.strip()).strip()
+    __version__ = str(args.version or version)
+    args.version = shlex.quote(__version__.strip()).strip()
+    __license__ = args.license_type or license_type
+    args.license_type = shlex.quote(str(__license__).strip()).strip()
     with commit_context(
-        cwd, description=description, message=message, branch=branch
+        cwd, description=description, message=message, branch=branch, args=args
     ) as (uname, rname, desc):
         repo_name = repo_name or rname
         username = username or uname
+        GIT_USERNAME = username or GIT_USERNAME
         description = description or desc
         url = f"https://github.com/{username}/{repo_name}.git"
-        with setup_context(program_name=repo_name or cwd.name, cwd=cwd) as setup:
-            setup.description = description
-            setup.author = author or username
-            setup.author_email = author_email or __email__
-            setup.version = version or __version__
-            setup.license = license_type or __license__
-            setup.download_url = url
-            setup(generate=True)
+
         try:
             repo_cmd = _repo_command(
                 cwd,
@@ -455,6 +502,7 @@ def create_repo(
         except CommandError as e:
             print(toterm(f"Command failed: {e.message}", "red"))
             return alternate_commands(url)
+
 
 def alternate_commands(url: str | URL | None = None):
     _results = []
@@ -489,11 +537,13 @@ def alternate_commands(url: str | URL | None = None):
 # 4. Create an empty repo on GitHub, then add it as remote
 # 5. In VS Code, use the Source Control tab to see changes, stage, unstage, commit, and push
 
+
 # 6. To discard unstaged edits to a file:
-def discard_changes(file_path: str,cwd: Path | str | None = None):
+def discard_changes(file_path: str, cwd: Path | str | None = None):
     """Discard unstaged changes to a file."""
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    return cmd(f"git checkout -- {file_path}",cwd)
+    return cmd(f"git checkout -- {file_path}", cwd)
+
 
 # 7. To un-commit the last commit but keep changes in your working tree:
 def uncommit_last(cwd: Path | str | None = None):
@@ -501,62 +551,133 @@ def uncommit_last(cwd: Path | str | None = None):
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
     return _reset_commit(cwd=cwd)
 
+
 # 8. To hard-reset to a previous commit (warning: this deletes newer commits):
 def hard_reset(commit_hash: str, cwd: Path | str | None = None):
     """Hard reset to a specific commit."""
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    return cmd(f"git reset --hard {commit_hash.strip()}",cwd)
+    return cmd(f"git reset --hard {commit_hash.strip()}", cwd)
+
 
 # 9. To revert a pushed commit (creates a new “undo” commit):
-def revert_commit(commit_hash: str,cwd: Path | str | None = None):
+def revert_commit(commit_hash: str, cwd: Path | str | None = None):
     """Revert a pushed commit by creating a new commit that undoes the changes."""
     cwd = Path(cwd).absolute() if cwd else CURRENT_DIR
-    return cmd(f"git revert {commit_hash.strip()}",cwd)
+    return cmd(f"git revert {commit_hash.strip()}", cwd)
 
 
-
-
-def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> tuple[argparse.Namespace, argparse.ArgumentParser]:
-    global GIT_USERNAME
-    if args.function_selector not in [str(selector.value) for selector in Selector]:
-        parser.error(toterm(f"Invalid function selector: {args.function_selector}. Must be one of {[selector.value for selector in Selector]}."))
-    if args.function_selector == Selector.INIT.value:
-        #if not args.username or not args.repo_name:
-        print(toterm("This command takes care of 'git init' through 'git commit'.", "green"))
-    elif args.function_selector in [Selector.REVERT.value, Selector.HARD_RESET.value]:
-        if not args.commit_hash:
-            args.commit_hash = shlex.quote(input("Enter the commit hash to reset to: ").strip())
-        if not args.commit_hash:
-            parser.error(toterm("No commit hash provided. Aborting reset operation."))
-        args.commit_hash = shlex.quote(args.commit_hash.strip())
-    if args.description:
-        args.description = shlex.quote(args.description.strip())
-    if args.message:
-        args.message = shlex.quote(args.message.strip())
-    if args.branch:
-        args.branch = shlex.quote(args.branch.strip())
-    if args.username:
-        args.username = shlex.quote(args.username.strip())
-        GIT_USERNAME = args.username
-    if args.repo_name:
-        args.repo_name = shlex.quote(args.repo_name.strip())
-    if args.filename:
-        args.filename = Path(shlex.quote(args.filename)).absolute()
-        if not args.filename.exists():
-            parser.error(toterm(f"The specified file does not exist: {args.filename}"))
+def validate_args(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> tuple[argparse.Namespace, argparse.ArgumentParser]:
+    global GIT_USERNAME, CURRENT_DIR, __email__, __author__, __version__, __license__
     args.cwd = Path(args.cwd).absolute() if args.cwd else CURRENT_DIR
+    CURRENT_DIR = args.cwd
     if not args.cwd.exists():
         parser.error(toterm(f"The specified directory does not exist: {args.cwd}"))
     if not args.cwd.is_dir():
         parser.error(toterm(f"The specified path is not a directory: {args.cwd}"))
+    if args.function_selector not in [str(selector.value) for selector in Selector]:
+        parser.error(
+            toterm(
+                f"Invalid function selector: {args.function_selector}. Must be one of {[selector.value for selector in Selector]}."
+            )
+        )
+    if args.function_selector in [Selector.REVERT.value, Selector.HARD_RESET.value]:
+        if not args.commit_hash:
+            args.commit_hash = shlex.quote(
+                input("Enter the commit hash to reset to: ").strip()
+            ).strip()
+        if not args.commit_hash:
+            parser.error(toterm("No commit hash provided. Aborting reset operation."))
+        args.commit_hash = shlex.quote(args.commit_hash.strip()).strip()
+    elif args.function_selector == Selector.DISCARD.value:
+        if not args.filename:
+            args.filename = shlex.quote(
+                input("Enter the filename to discard changes: ").strip()
+            ).strip()
+        if not args.filename:
+            parser.error(toterm("No filename provided. Aborting discard operation."))
+    elif args.function_selector == Selector.SETUP.value:
+        if not args.repo_name:
+            args.repo_name = (
+                shlex.quote(
+                    input(
+                        f"Enter the repository name <DEFAULT>: {args.cwd.name}: "
+                    ).strip()
+                ).strip()
+                or args.cwd.name
+            )
+        if not args.description:
+            args.description = shlex.quote(
+                input("Enter a description for the repository: ").strip()
+            ).strip()
+        if not args.author_email:
+            args.author_email = (
+                shlex.quote(
+                    input(f"Enter your email address <DEFAULT: {__email__}>: ").strip()
+                ).strip()
+                or __email__
+            )
+            __email__ = str(args.author_email)
+        if not args.author:
+            args.author = (
+                shlex.quote(
+                    input(f"Enter your name <DEFAULT: {GIT_USERNAME}>: ").strip()
+                ).strip()
+                or __author__
+            )
+            __author__ = args.author
+        if not args.version:
+            args.version = (
+                shlex.quote(
+                    input(f"Enter the version <DEFAULT: {__version__}>: ").strip()
+                ).strip()
+                or __version__
+            )
+            __version__ = str(args.version)
+        if not args.license_type:
+            args.license_type = (
+                shlex.quote(
+                    input(f"Enter the license type <DEFAULT: {__license__}>: ").strip()
+                ).strip()
+                or __license__
+            )
+            __license__ = args.license_type
+        if not args.url:
+            args.url = (
+                shlex.quote(
+                    input(
+                        f"Enter the repository URL <DEFAULT: https://github.com/{GIT_USERNAME}/{args.repo_name}.git"
+                    )
+                )
+                .strip()
+                .strip()
+                or f"https://github.com/{GIT_USERNAME}/{args.repo_name}.git"
+            )
+    if args.description:
+        args.description = shlex.quote(args.description.strip()).strip()
+    if args.message:
+        args.message = shlex.quote(args.message.strip()).strip()
+    if args.branch:
+        args.branch = shlex.quote(args.branch.strip()).strip()
+    if args.username:
+        args.username = shlex.quote(args.username.strip()).strip()
+        GIT_USERNAME = args.username or GIT_USERNAME
+    if args.repo_name:
+        args.repo_name = shlex.quote(args.repo_name.strip()).strip()
+    if args.filename:
+        args.filename = Path(shlex.quote(args.filename).strip()).absolute()
+        if not args.filename.exists():
+            parser.error(toterm(f"The specified file does not exist: {args.filename}"))
+
     if args.url:
         args.url = URL(args.url.strip()) if isinstance(args.url, str) else args.url
         if not args.url.is_absolute():
             parser.error(toterm(f"The specified URL is not absolute: {args.url}"))
     if args.remote:
-        args.remote = shlex.quote(args.remote.strip())
-        if not args.remote:
-            parser.error(toterm("Remote name cannot be empty."))
+        args.remote = shlex.quote(args.remote.strip()).strip()
+    else:
+        args.remote = "origin"
     if args.visibility and args.visibility not in Visibility:
             parser.error(toterm(f"Invalid visibility: {args.visibility}. Must be one of {[v.value for v in Visibility]}."))
     return args,parser
@@ -704,11 +825,12 @@ def main_init(args:argparse.Namespace, parser: argparse.ArgumentParser):
     if args.function_selector in [Selector._GIT_INIT.value, Selector._PRE_STAGE.value, Selector._STAGE.value, Selector._COMMIT.value, Selector._STATUS.value, Selector._LOG.value, Selector._BRANCH.value, Selector._DIFF.value, Selector.PUSH.value, Selector.PULL.value, Selector.FETCH.value, Selector.UNCOMMIT.value, Selector.DISCARD.value, Selector.REVERT.value, Selector.HARD_RESET.value, Selector.COMMIT.value, Selector._VARS.value]:
         single_init(args, cwd=CURRENT_DIR, parser=parser)
     elif args.function_selector == Selector.INIT.value:
-        username, repo_name,description = initialize(
+        username, repo_name, description = initialize(
             CURRENT_DIR,
             description=args.description,
             message=args.message,
             branch=args.branch,
+            args=args,
         )
         if username and repo_name and description:
             print(
@@ -731,6 +853,7 @@ def main_init(args:argparse.Namespace, parser: argparse.ArgumentParser):
             remote=args.remote,
             url=args.url,
             interactive=args.interactive,
+            args=args,
         )
         print(
             toterm(
@@ -738,17 +861,22 @@ def main_init(args:argparse.Namespace, parser: argparse.ArgumentParser):
                 "green",
             )
         )
+    elif args.function_selector == Selector.SETUP.value:
+        setup(args, cwd=CURRENT_DIR)
+        print(toterm(f"Setup completed in {CURRENT_DIR}", "magenta"))
     elif args.function_selector == Selector.RESET.value:
         reset(cwd=CURRENT_DIR, filename=args.filename)
         print(toterm(f"Reset operation completed in {CURRENT_DIR}", "magenta"))
     elif args.function_selector == Selector.UPDATE.value:
         if not args.filename:
-            args.filename = shlex.quote(
-                input("Enter the filename to update<DEFAULT: '.': ").strip()
+            args.filename = (
+                shlex.quote(
+                    input(
+                        f"Enter the filename to update<DEFAULT: {args.cwd.name}: "
+                    ).strip()
+                )
+                or "."
             )
-        if not args.filename:
-            print(toterm("No filename provided. Updating all.", "magenta"))
-            args.filename = "."
         if not args.message:
             args.message = shlex.quote(
                 input(
@@ -759,5 +887,5 @@ def main_init(args:argparse.Namespace, parser: argparse.ArgumentParser):
         update_repo(
             filename=args.filename,
             message=args.message,
-            cwd=CURRENT_DIR,
+            cwd=args.cwd or CURRENT_DIR,
         )

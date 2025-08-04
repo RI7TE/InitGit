@@ -6,8 +6,6 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import ujson as json
-
 
 sys.path.append(str(Path(__file__).absolute().parent))
 if TYPE_CHECKING:
@@ -22,6 +20,7 @@ from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 
 from colorama import Fore, Style
+
 
 def stamp_date() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
@@ -162,7 +161,7 @@ except AttributeError:
     STDLIB_MODULES = set()
 
 
-def all_modules():
+def all_modules() -> set[str]:
     return {
         mod.__spec__.name.split('.')[0]
         for mod in sys.modules.values()
@@ -234,10 +233,22 @@ def find_imports(root: Path, package_name: str) -> list[str]:
 
 def find_top_package_name(root: Path) -> str | None:
     """Try to detect the package name from __init__.py location."""
-    for item in root.iterdir():
-        if item.is_dir() and (item / '__init__.py').exists():
-            return item.name
-    return None
+    if not root.is_dir():
+        viz(f"Provided path {root} is not a directory.", color='red')
+        return None
+    if (root / '__init__.py').exists():
+        return root.name
+    if (root / '__main__.py').exists():
+        return root.name
+    return (
+        next(
+            item.name
+            for item in root.iterdir()
+            if item.is_dir() and (item / '__init__.py').exists()
+        )
+        if any(item.is_dir() for item in root.iterdir())
+        else None
+    )
 
 
 def requirements_exists(cwd: Path) -> bool:
@@ -262,11 +273,6 @@ def get_installed_version(pkg: str) -> str | None:
 
 def generate_requirements(root: Path) -> list[str]:
     root = root or Path.cwd()
-    if requirements_exists(root):
-        viz(
-            "requirements.txt already exists. Skipping file generation. If you want to retry, delete the requirements.txt file in the working directory.",
-            color='yellow',
-        )
         # return root / "requirements.txt"
     if package_name := find_top_package_name(root):
         imports = find_imports(root, package_name)
@@ -279,48 +285,305 @@ def generate_requirements(root: Path) -> list[str]:
     return sorted(requirements)
 
 
-def generate(root: Path) -> Path:
-    requirements = generate_requirements(root or Path.cwd())
-    (root / "requirements.txt").write_text(
-        "\n".join(requirements) + "\n", encoding='utf-8'
-    )
+def generate(root: Path | str | None = None) -> Path:
+    root = root or Path.cwd()
+    if isinstance(root, str):
+        root = Path(root)
+    if requirements_exists(root):
+        viz(
+            "requirements.txt already exists. Skipping file generation. If you want to retry, delete the requirements.txt file in the working directory.",
+            color='yellow',
+        )
+    requirements = generate_requirements(root)
+    root = root / "requirements.txt"
+    if not root.exists():
+        root.touch()
+    if not requirements:
+        viz(
+            "No requirements found. Skipping requirements.txt creation.", color='yellow'
+        )
+        return root
+    root.write_text("\n".join(requirements) + "\n", encoding='utf-8')
     viz(f"requirements.txt created with {len(requirements)} packages.")
-    return root / "requirements.txt"
+    return root
 
 
 # finding local packages and modules
-def find_packages(base_dir: Path):
-    """Find all Python packages (directories with __init__.py)."""
-    packages = []
-    for path in base_dir.rglob('__init__.py'):
-        # Skip unwanted dirs
-        if any(skip in path.parts for skip in SKIP_DIRS):
-            continue
-        pkg = ".".join(path.parent.relative_to(base_dir).parts)
-        packages.append(pkg)
-    return sorted(packages)
 
 
-def find_py_modules(base_dir: Path):
-    """Find all standalone Python modules (not part of a package)."""
-    modules = []
-    modules.extend(
-        py_file.stem
-        for py_file in base_dir.glob("*.py")
-        if py_file.is_file() and py_file.name != '__init__.py'
+class Packages:
+    def __init__(self, packages: list[str] | None = None):
+        """Initialize with a list of packages."""
+        self.py_packages = packages or []
+
+    def __iter__(self):
+        """Iterate over the packages."""
+        yield from self.py_packages
+
+    def __get__(self, instance, owner):
+        """Return the packages."""
+        return instance.py_packages
+
+    def __set__(self, instance, value):
+        """Set the packages."""
+        if isinstance(value, list):
+            instance.py_packages = value
+            self.py_packages = value
+        else:
+            raise TypeError("Value must be a list of packages.")
+
+    def __repr__(self):
+        """Return a string representation of the packages."""
+        return f"Packages({self.py_packages})"
+
+    def __len__(self):
+        """Return the number of packages."""
+        return len(self.py_packages)
+
+    def __contains__(self, item):
+        """Check if a package is in the list."""
+        return item in self.py_packages
+
+    def __getitem__(self, index):
+        """Get a package by index."""
+        return self.py_packages[index]
+
+
+class Modules:
+    """Class to hold Python modules."""
+
+    def __init__(self, py_modules: list[str] | None = None):
+        self.py_modules = py_modules or []
+
+    def __iter__(self):
+        """Iterate over the modules."""
+        yield from self.py_modules
+
+    def __len__(self):
+        """Return the number of modules."""
+        return len(self.py_modules)
+
+    def __contains__(self, item):
+        """Check if a module is in the list."""
+        return item in self.py_modules
+
+    def __getitem__(self, index):
+        """Get a module by index."""
+        return self.py_modules[index]
+
+    def __get__(self, instance, owner):
+        """Return the modules."""
+        return instance.py_modules
+
+    def __set__(self, instance, value):
+        """Set the modules."""
+        if isinstance(value, list):
+            instance.py_modules = value
+            self.py_modules = value
+            # self.py_modules = value
+        else:
+            raise TypeError("Value must be a list of modules.")
+
+    def __repr__(self):
+        """Return a string representation of the modules."""
+        return f"Modules({','.join(self.py_modules)})"
+
+
+class PackagesAndModules:
+    """Class to hold packages and modules."""
+
+    packages: Packages = Packages()
+    modules: Modules = Modules()
+
+    def __init__(self, base_dir: Path | str | None = None):
+        base_dir = Path(base_dir) if base_dir else Path.cwd()
+        if not base_dir.is_dir():
+            raise ValueError(f"Provided path {base_dir} is not a directory.")
+        self.packages, self.modules, self._base_dir = self.get_packages_modules(
+            base_dir
+        )
+
+    def __iter__(self):
+        yield from self.packages
+        yield from self.modules
+
+    @property
+    def base_dir(self) -> Path:
+        """Return the base directory."""
+        return self._base_dir
+
+    @base_dir.setter
+    def base_dir(self, value: Path | str):
+        """Set the base directory."""
+        if isinstance(value, str):
+            value = Path(value).absolute()
+        if not value.is_dir():
+            raise ValueError(f"Provided path {value} is not a directory.")
+        self._base_dir = value
+        self.packages, self.modules, self._base_dir = self.get_packages_modules(value)
+
+    def find_packages(self, base_dir: Path) -> list[typing.Any]:
+        """Find all Python packages (directories with __init__.py)."""
+        packages = []
+        for path in base_dir.rglob('*.py'):
+            # Skip unwanted dirs
+            if any(skip in path.parts for skip in SKIP_DIRS):
+                continue
+            pkg = ".".join(path.parent.relative_to(base_dir).parts)
+            packages.append(pkg)
+            [packages.remove(i) for i in packages if not i]
+        return sorted(packages)
+
+    def find_py_modules(self, base_dir: Path):
+        """Find all standalone Python modules (not part of a package)."""
+        modules = []
+        modules.extend(
+            py_file.stem
+            for py_file in base_dir.glob("*.py")
+            if py_file.is_file() and py_file.name != '__init__.py'
+        )
+        return sorted(modules)
+
+    def get_packages_modules(
+        self, cwd: Path | str | None = None
+    ) -> tuple[list[str], list[str], Path]:
+        if isinstance(cwd, str):
+            cwd = Path(cwd)
+        base_dir = cwd or Path.cwd()
+        py_packages = self.find_packages(base_dir)
+        py_modules = self.find_py_modules(base_dir)
+
+        self._base_dir = base_dir
+        self.py_packages = py_packages
+        self.py_modules = py_modules
+        return self.py_packages, self.py_modules, self._base_dir
+
+    @property
+    def all_packages(self) -> list[str]:
+        """Return the list of packages."""
+        return self.py_packages
+
+    @property
+    def all_modules(self) -> list[str]:
+        """Return the list of modules."""
+        return self.py_modules
+
+    @property
+    def root(self) -> Path:
+        """Return the root directory."""
+        return self.base_dir
+
+    @root.setter
+    def root(self, value: Path | str):
+        self.base_dir = Path(value) if isinstance(value, str) else value
+
+    @property
+    def packages_and_modules(self) -> dict[str, list[str]]:
+        """Return a dictionary of packages and modules."""
+        return {
+            'packages': self.packages,
+            'modules': self.modules,
+        }
+
+    def __repr__(self):
+        """Return a string representation of the packages and modules."""
+        return f"PackagesAndModules(base_dir={self.base_dir})"
+
+    def __str__(self):
+        """Return a string representation of the packages and modules."""
+        return f"Packages: {self.packages}, Modules: {self.modules}, Base Directory: {self.base_dir}"
+
+    def __getattr__(self, item):
+        """Get an attribute from the packages or modules."""
+        if item in self.py_packages:
+            return self.py_packages[item]
+        if item in self.py_modules:
+            return self.py_modules[item]
+        if item in self.__dict__:
+            return self.__dict__[item]
+        if item in self.__class__.__dict__:
+            return self.__class__.__dict__[item]
+        if item in self:
+            return super().__getattribute__(item)
+        raise AttributeError(f"{item} not found in packages or modules.")
+
+    def __getitem__(self, item: int | str):
+        """Get a package or module by index."""
+        if isinstance(item, int):
+            if item < len(self.py_packages):
+                return self.py_packages[item]
+            item -= len(self.py_packages)
+            if item < len(self.py_modules):
+                return self.modules[item]
+            raise IndexError("Index out of range for packages and modules.")
+        if item in self.py_packages:
+            return self.py_packages[self.py_packages.index(item)]
+        if item in self.py_modules:
+            return self.py_modules[self.py_modules.index(item)]
+        if item in self.__dict__:
+            return self.__dict__[item]
+        if item in self.__class__.__dict__:
+            return self.__class__.__dict__[item]
+        if item in self:
+            return super().__getattribute__(item)
+        raise KeyError(f"{item} not found in packages or modules.")
+
+    def __setattr__(self, key, value):
+        super().__setattr__(key, value)
+
+    def __contains__(self, item):
+        """Check if a package or module is in the packages and modules."""
+        return (
+            item in self.packages
+            or item in self.modules
+            or item in self.__dict__
+            or item in self.__class__.__dict__
+        )
+
+
+def test_get_packages_modules(pam: PackagesAndModules):
+    """Test function for get_packages_modules."""
+    cwd = Path(__file__).parent
+
+    class Test:
+        """Test class to simulate instance."""
+
+        packages_and_modules: PackagesAndModules = pam
+
+    test_instance = Test()
+    result = test_instance.packages_and_modules
+    viz(f"ResultType: {type(result)}", color='blue')
+    viz(f"Result: {result}", color='green')
+    assert isinstance(result, PackagesAndModules | dict), (
+        "Result should be a dictionary"
     )
-    return sorted(modules)
+    assert isinstance(result.packages_and_modules, dict), (
+        "Result should be a dictionary"
+    )
+    assert 'packages' in result, "Result should contain 'packages' key"
+    assert 'modules' in result, "Result should contain 'modules' key"
+    print("Test passed successfully!")
+    viz("result", result, color='red')
+    return result
 
 
-def get_packages_modules(cwd: Path | None = None) -> dict[str, list[str]]:
-    base_dir = Path.cwd()
-    packages = find_packages(base_dir)
-    py_modules = find_py_modules(base_dir)
+def test_find_top_package_name():
+    """Test function for find_top_package_name."""
+    cwd = Path(__file__).parent
+    package_name = find_top_package_name(cwd)
+    assert isinstance(package_name, str) or package_name is None, (
+        "Result should be a string or None"
+    )
+    print(f"Top package name: {package_name}")
+    return package_name
 
-    print("# For setup.py")
-    print(f"packages={packages}")
-    print(f"py_modules={py_modules}")
-    return {
-        "packages": packages,
-        "modules": py_modules,
-    }
+
+def test():
+    """Run all tests."""
+    pam = PackagesAndModules(base_dir=Path(__file__).parent.parent)
+    print("Running tests...")
+    test_get_packages_modules(pam)
+    test_find_top_package_name()
+    viz("All tests passed successfully!")
+    pam.root = Path(__file__).parent
+    viz("PAM", pam['py_packages'], color='green')

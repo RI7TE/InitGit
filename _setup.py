@@ -2,10 +2,10 @@
 from __future__ import annotations
 import sys
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
-from contextlib import contextmanager
 
 sys.path.append(str(Path(__file__).absolute().parent))
 if TYPE_CHECKING:
@@ -14,14 +14,17 @@ if TYPE_CHECKING:
 from typing import Any
 
 from setuptools import Command, Distribution, Extension
+
+
 if TYPE_CHECKING:
-    from yarl import URL
     from collections.abc import Mapping
+
+    from yarl import URL
 
 Incomplete =  Any
 import setuptools
 
-from util import generate_requirements, get_packages_modules, viz
+from util import PackagesAndModules, generate_requirements, viz
 
 
 class BuildInfo(TypedDict):
@@ -151,6 +154,7 @@ class ExtraKwds(dict):
 
 
 class SetUp:
+    packages_modules: PackagesAndModules = PackagesAndModules()
     def __init__(
         self,
         *,
@@ -168,17 +172,17 @@ class SetUp:
         **extra_kwds: ExtraKwds | dict[str, Any] | None,
     ):
         self.cwd = Path(cwd).absolute() if cwd else Path.cwd().absolute()
-        packages_modules = get_packages_modules(Path.cwd())
+        self.packages_modules.root = self.cwd
         self.name = name
         self.version = str(version)
         self.description = description
         self.author = author
         self.author_email = author_email
         self.download_url = download_url
-        self.py_modules = py_modules or packages_modules.get("modules")
+        self.py_modules = py_modules or self.packages_modules["py_modules"]
         self.license = license
         self.requires = requires or generate_requirements(Path.cwd())
-        self.packages = packages or packages_modules.get("packages")
+        self.packages = packages or self.packages_modules["py_packages"]
         self.extra_kwds = extra_kwds or {}
 
     def setup(self):
@@ -210,7 +214,7 @@ class SetUp:
             return False
         return True
 
-    def generate_setup_py(self):
+    def generate_setup_code(self):
         """Generate a setup.py file in the current directory."""
         setup_code = f"""\
 from setuptools import setup
@@ -235,7 +239,7 @@ setup(
 
     def __call__(self, generate:bool | None = None, *args, **kwargs):
         """Run the setup function when the instance is called."""
-        self.generate_setup_py() if generate else self.setup()
+        self.generate_setup_code() if generate else self.setup()
         return self
 
 def program_setup(
@@ -258,12 +262,15 @@ def program_setup(
         license=license_type,
         extra_kwds=extra_kwds if isinstance(extra_kwds, ExtraKwds | dict) else {},
     )
-    setup_instance.generate_setup_py()
+    setup_instance.generate_setup_code()
 
 @contextmanager
 def setup_context(program_name: str, cwd: Path | str | None = None):
     """Context manager for setting up a Python package."""
-    yield SetUp(name=program_name, cwd=cwd)
+    with SetUp(name=program_name, cwd=cwd) as setup_instance:
+        yield setup_instance
+        setup_instance.generate_setup_code()
+        viz(f"Setup completed for package: {setup_instance.name}")
 
 
 def main():
@@ -293,7 +300,7 @@ def main():
         download_url=args.download_url,
         license=args.license,
     )
-    setup_instance.generate_setup_py()
+    setup_instance.generate_setup_code()
 
 
 def test_keyword_arguments():
@@ -302,8 +309,8 @@ def test_keyword_arguments():
         long_description="This package provides tools for initializing and managing Git repositories.",
         maintainer="Steven Kellum",
     )
-    extra_kwds.DEEZ = "NUTS"
-    extra_kwds['DEEZ'] = "NUTS"
+    extra_kwds.DEEZ = "WHAT"
+    extra_kwds['DEEZ'] = "WHAT"
     viz("Running setup with extra keywords:", extra_kwds)
     viz("Extra keywords:", extra_kwds)
     viz(f"Extra keyword: {extra_kwds.keys()}")

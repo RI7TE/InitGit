@@ -38,6 +38,8 @@ Function selectors:
             Hard reset to a specific commit.
   revert
             Revert a pushed commit by creating a new commit that undoes the changes.
+  setup
+            Set up a Python package with metadata and configuration.
    add
             Stage all files in the current directory.
   commit
@@ -67,13 +69,13 @@ Options:
                 Branch name for the initial commit. Default is 'master'.
   -u, --username
                 GitHub username for creating a remote repository. Use with -r or --repo.
-  -r, --repo
+  -r, --repo, --repo-name
                 Repo name for creating a remote repository. Use with -u or --username.
   -f, --filename
                 Filename to reset stage for. If not provided, will prompt for input.
   --hash
                 Commit hash to reset to for hard reset or revert.
-  -v, --visibility
+  --vis, --visibility
                 Visibility of the repository. Default is 'public'.
   --remote
                 Remote name for the repository. Default is 'origin'.
@@ -81,7 +83,16 @@ Options:
                 URL for the repository. Default is None.
   --interactive
                 Run the command in interactive mode.
-    --version
+  --author
+                Author name for the package. Default is 'Steven Kellum'.
+  --author-email
+                Author email for the package.
+  -l, --license
+                License type for the package. Default is 'Proprietary License'.
+  --repo-version, --ver
+                Package version. Default is '0.1.0'.
+
+   -v, --version
                 Show the version of the script.
     -h, --help
                 Show this help message and exit.
@@ -126,6 +137,7 @@ Options:
     parser.add_argument(
         "-r",
         "--repo",
+        "--repo-name",
         type=str,
         help="Repo name for creating a remote repository.",
         dest="repo_name",
@@ -163,13 +175,14 @@ Options:
         metavar="<commit_hash>",
     )
     parser.add_argument(
-        "-v",
+        "--vis",
         "--visibility",
         type=Visibility,
-        choices=list(Visibility),
+        choices=[i.value for i in Visibility],
         default=Visibility.PUBLIC,
         help="Visibility of the repository. Default is 'public'.",
         dest="visibility",
+        metavar="<visibility>",
     )
     parser.add_argument(
         "--remote",
@@ -177,6 +190,7 @@ Options:
         default="origin",
         help="Remote name for the repository. Default is 'origin'.",
         dest="remote",
+        metavar="<remote>",
     )
     parser.add_argument(
         "--url",
@@ -190,13 +204,46 @@ Options:
         action="store_true",
         help="Run the command in interactive mode.",
         dest="interactive",
+        default=False,
     )
     parser.add_argument(
+        "-v",
         "--version",
         action="version",
         version=f"{__name__} {__version__}",
         help="Show the version of the script.",
     )
+    parser.add_argument(
+        "--repo-version",
+        "--ver",
+        default="0.1.0",
+        help="Package version",
+        dest="version",
+        metavar="<version>",
+    )
+    parser.add_argument(
+        "--author",
+        default="Steven Kellum",
+        help="Author name",
+        dest="author",
+        metavar="<author>",
+    )
+    parser.add_argument(
+        "--author-email",
+        default="sk@perfectatrifecta.com",
+        help="Author email",
+        dest="author_email",
+        metavar="<author_email>",
+    )
+    parser.add_argument(
+        "-l",
+        "--license",
+        default="Proprietary License",
+        help="License type",
+        dest="license",
+        metavar="<license>",
+    )
+
     args = parser.parse_args()
     return args, parser
 

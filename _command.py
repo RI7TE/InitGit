@@ -236,5 +236,3 @@ def test_command():
 if __name__ == "__main__":
     test_command()
     viz("All tests passed.")
-else:
-    viz("Command module loaded. Use 'test_command()' to run tests.")
