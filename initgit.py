@@ -289,7 +289,7 @@ def setup(args: argparse.Namespace, cwd: Path | str | None = None):
         setup.author = __author__ or GIT_USERNAME
         setup.author_email = args.author_email or __email__
         setup.version = args.version or __version__
-        setup.license = args.license_type or __license__
+        setup.license = args.license or __license__
         setup.download_url = (
             args.url
             or f"https://github.com/{GIT_USERNAME}/{args.repo_name or cwd.name}.git"
@@ -475,8 +475,8 @@ def create_repo(
     args.author_email = shlex.quote(__email__.strip()).strip()
     __version__ = str(args.version or version)
     args.version = shlex.quote(__version__.strip()).strip()
-    __license__ = args.license_type or license_type
-    args.license_type = shlex.quote(str(__license__).strip()).strip()
+    __license__ = args.license or license_type
+    args.license = shlex.quote(str(__license__).strip()).strip()
     with commit_context(
         cwd, description=description, message=message, branch=branch, args=args
     ) as (uname, rname, desc):
@@ -635,14 +635,14 @@ def validate_args(
                 or __version__
             )
             __version__ = str(args.version)
-        if not args.license_type:
-            args.license_type = (
+        if not args.license:
+            args.license = (
                 shlex.quote(
                     input(f"Enter the license type <DEFAULT: {__license__}>: ").strip()
                 ).strip()
                 or __license__
             )
-            __license__ = args.license_type
+            __license__ = args.license
         if not args.url:
             args.url = (
                 shlex.quote(
