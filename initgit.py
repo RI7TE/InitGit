@@ -148,7 +148,9 @@ def pre_stage(
         )
     try:
         gitignore_file.write_text(f'{GIT_IGNORE.strip()}')
-        readme_file.write_text(f'{repo_name.strip()}\n{description.strip()}')
+        readme_file.write_text(
+            f'{repo_name.strip()}\n{description.strip()}\nTo install program run `pip install -e . from the root directory\nTo install requirements run `pip install -r requirements.txt`\nTo run the program, use `python -m {repo_name.strip()}`'
+        )
         license_file.write_text(f'{LICENSE.strip()}')
     except Exception as e:
         raise CommandError(cmd=" ".join(e.args), errcode=2, stage="PRE-STAGE") from e
