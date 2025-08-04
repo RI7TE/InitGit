@@ -1,6 +1,5 @@
 #! /usr/bin/env python
 from __future__ import annotations
-import datetime as dt
 import os
 import sys
 
@@ -31,27 +30,12 @@ from enum import Enum
 from time import sleep
 
 from _command import CURRENT_DIR, Command, CommandError, cmd
-from _setup import ExtraKwds, SetUp, program_setup, setup_context
+from _setup import setup_context
 from yarl import URL
 
 from _license import LICENSE_TEXT
 from util import generate, stamp_date, toterm, viz
 
-
-"""
-1. git add .
-2. git commit -a -m '{message}'
-3. git branch -M master
-4. git push -u origin master
-5. touch setup.py
-"To push changes, use: git push -u origin master"
-"To pull changes, use: git pull origin master"
-"To fetch changes, use: git fetch origin"
-"To check the status, use: git status"
-"To view the log, use: git log --oneline"
-"To view the branches, use: git branch"
-"To view the diff, use: git diff"
-"""
 
 GIT_USERNAME = (
     en.get("GITHUB_USERNAME")
